@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 using ClosedXML.Excel;
+using ExcelDataReader;
 
 namespace EjercicioDapperExcel.Controllers
 {
@@ -13,10 +14,13 @@ namespace EjercicioDapperExcel.Controllers
     public class ProyectosExcelsController : ControllerBase
     {
         private readonly IConfiguration _configuration;
+        private readonly IGestionProyectos _gestionProyectos;
 
-        public ProyectosExcelsController(IConfiguration configuration)
+        public ProyectosExcelsController(IConfiguration configuration, IGestionProyectos gestionProyectos)
         {
             _configuration = configuration;
+
+            _gestionProyectos = gestionProyectos;
         }
 
         private SqlConnection GetConnection()
@@ -90,4 +94,73 @@ namespace EjercicioDapperExcel.Controllers
                 return BadRequest(ex.Message);
             }
         }
-}    }
+
+        [HttpPost("ImportProyectsExcel")]
+        public async Task<IActionResult> ImportarExcelFile(IFormFile file)
+        {
+            try
+            {
+                System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+
+                if (file == null || file.Length == 0)
+                {
+                    return BadRequest("No hay archivo importado");
+                }
+
+                using (var stream = file.OpenReadStream())
+                {
+                    using (var reader = ExcelReaderFactory.CreateReader(stream))
+                    {
+                        bool isHeaderSkipped = false;
+                        var proyectos = new List<ProyectosSolo>();
+
+                        do
+                        {
+                            while (reader.Read())
+                            {
+                                if (!isHeaderSkipped)
+                                {
+                                    isHeaderSkipped = true;
+                                    continue;
+                                }
+
+                                var nombre = reader.GetValue(0)?.ToString();
+                                if (string.IsNullOrEmpty(nombre) && reader.GetValue(2) == null)
+                                {
+                                    continue;
+                                }
+
+                                var descripcion = reader.GetValue(1)?.ToString();
+                                var fechaInicio = reader.GetValue(2) is DateTime ? (DateTime)reader.GetValue(2) : DateTime.MinValue;
+                                var fechaFin = reader.GetValue(3) is DateTime ? (DateTime?)reader.GetValue(3) : null;
+
+                                var proyecto = new ProyectosSolo
+                                {
+                                    Nombre = nombre,
+                                    Descripcion = descripcion,
+                                    FechaInicio = fechaInicio,
+                                    FechaFin = fechaFin
+                                };
+
+                                proyectos.Add(proyecto);
+                            }
+                        }
+                        while (reader.NextResult());
+
+                        foreach (var proyecto in proyectos)
+                        {
+                            await _gestionProyectos.CreateProyectoAsync(proyecto);
+                        }
+                    }
+                }
+
+                return Ok("Archivo importado correctamente");
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, ex.Message);
+            }
+        }
+
+    }
+}
